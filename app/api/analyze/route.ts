@@ -3,262 +3,90 @@ import { GoogleGenerativeAI } from "@google/generative-ai";
 
 export const maxDuration = 60;
 
-// Simple in-memory cache to save quota and ensure consistency
-const analysisCache = new Map<string, { data: any, timestamp: number }>();
+// Simple in-memory cache for shared data
+const analysisCache = new Map<string, { timestamp: number; data: any }>();
 const CACHE_TTL = 60 * 1000; // 60 seconds
 
 export async function POST(req: Request) {
   try {
     const { url, strategy = 'mobile' } = await req.json();
-
-    if (!url) {
-      return NextResponse.json({ error: 'URL is required' }, { status: 400 });
-    }
-
-    // Normalize URL
-    let normalizedUrl = url.trim();
-    if (!normalizedUrl.startsWith('http')) {
-      normalizedUrl = `https://${normalizedUrl}`;
-    } else {
-      normalizedUrl = normalizedUrl.replace(/^(https?:)\/*/, '$1//');
-    }
-
-    // Check Cache for Shared Data (Tech Stack, Security, AI)
-    const cacheKey = `shared_${normalizedUrl}`;
-    const cached = analysisCache.get(cacheKey);
-    const now = Date.now();
-
-    let techStack = null;
-    let urlSecurity = null;
-    let cachedInsights = null;
-    let cachedSecurity = null;
-
-    if (cached && (now - cached.timestamp < CACHE_TTL)) {
-      console.log(`[Cache] Using cached shared data for ${normalizedUrl}`);
-      techStack = cached.data.techStack;
-      urlSecurity = cached.data.urlSecurity;
-      cachedInsights = cached.data.insights;
-      cachedSecurity = cached.data.securityDetails;
-    } else {
-      // DetectZeStack URL Security & Tech Analysis
-      const dzsKey = process.env.DETECTZESTACK_API_KEY;
-      if (dzsKey) {
-        try {
-          const domain = normalizedUrl.replace(/https?:\/\//, '').split('/')[0];
-          const dzsRes = await fetch(`https://detectzestack.com/analyze?url=${domain}`, {
-            headers: { 'X-API-Key': dzsKey }
-          });
-          const dzsData = await dzsRes.json();
-          if (dzsRes.ok) {
-            techStack = dzsData.technologies || [];
-            urlSecurity = {
-              grade: dzsData.security_score || 'N/A',
-              headers: dzsData.security_headers || [],
-              ssl: dzsData.ssl_info || null,
-            };
-          }
-        } catch (err) {
-          console.error('[DetectZeStack] Error:', err);
-        }
-      }
-    }
-
-    // Initialize security details (reuse cached if available)
-    let securityDetails = cachedSecurity ? { ...cachedSecurity } : { hasCaptcha: false, hasForms: false, hasValidation: false, score: 100 };
-
     const apiKey = process.env.PAGESPEED_API_KEY;
-    if (!apiKey) {
-      return NextResponse.json({ error: 'API key not configured' }, { status: 500 });
-    }
-
-    // Backup Metadata Fetcher (if Lighthouse fails)
-    let backupMetadata = { title: '', description: '' };
-    try {
-      const metaRes = await fetch(normalizedUrl, { next: { revalidate: 3600 } });
-      const html = await metaRes.text();
-      const titleMatch = html.match(/<title>(.*?)<\/title>/i);
-      backupMetadata.title = titleMatch ? titleMatch[1] : '';
-      const descMatch = html.match(/<meta name="description" content="(.*?)"/i);
-      backupMetadata.description = descMatch ? descMatch[1] : '';
-    } catch (e) {
-      console.log('[Backup Meta] Failed to fetch meta');
-    }
-
-    const categories = ['performance', 'accessibility', 'best-practices', 'seo'];
-    const params = new URLSearchParams({
-      url: normalizedUrl,
-      key: apiKey,
-      strategy,
-    });
-    
-    categories.forEach(cat => params.append('category', cat));
-
-    let data: any = null;
-    const runLighthouse = async (cats: string[]) => {
-      const retryParams = new URLSearchParams({
-        url: normalizedUrl,
-        key: apiKey,
-        strategy,
-      });
-      cats.forEach(c => retryParams.append('category', c));
-      const apiUrl = `https://www.googleapis.com/pagespeedonline/v5/runPagespeed?${retryParams.toString()}`;
-      
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 50000);
-      try {
-        const response = await fetch(apiUrl, { signal: controller.signal });
-        clearTimeout(timeoutId);
-        if (response.ok) {
-          const json = await response.json();
-          return json;
-        }
-        return null;
-      } catch (e) {
-        return null;
-      }
-    };
-
-    console.log(`[PageSpeed] Analyzing: ${url} (${strategy})`);
-    
-    // Stage 1: Full Analysis
-    data = await runLighthouse(categories);
-
-    // Stage 2: Optimized Retry (Remove Best Practices - often the cause of errors)
-    if (!data) {
-      console.log(`[PageSpeed] Full analysis failed. Retrying without Best Practices...`);
-      data = await runLighthouse(['performance', 'accessibility', 'seo']);
-    }
-
-    // Stage 3: Core Retry (Performance + SEO)
-    if (!data) {
-      console.log(`[PageSpeed] Optimized retry failed. Retrying with Performance & SEO...`);
-      data = await runLighthouse(['performance', 'seo']);
-    }
-
-    // Stage 4: Minimal Retry (Performance Only)
-    if (!data) {
-      console.log(`[PageSpeed] Core retry failed. Final attempt with Performance only...`);
-      data = await runLighthouse(['performance']);
-    }
-
-    const lighthouseResult = data?.lighthouseResult;
-    
-    // Prepare metadata for Gemini
-    const siteTitle = lighthouseResult?.audits['document-title']?.displayValue || backupMetadata.title || 'Unknown Title';
-    const siteDesc = lighthouseResult?.audits['meta-description']?.displayValue || backupMetadata.description || '';
-
-    // Extract security and form info from Lighthouse if available
-    const thirdPartyScripts = lighthouseResult?.audits['third-party-summary']?.details?.items || [];
-    const hasCaptcha = thirdPartyScripts.some((item: any) => 
-      item.entity?.name?.toLowerCase().includes('recaptcha') || 
-      item.entity?.name?.toLowerCase().includes('hcaptcha')
-    );
-    const hasForms = !!lighthouseResult?.audits['form-field-multiple-labels'] || !!lighthouseResult?.audits['label'];
-
-    // Update security details with Lighthouse info
-    securityDetails.hasCaptcha = hasCaptcha;
-    securityDetails.hasForms = hasForms;
-
-    // Optional: Get Gemini Insights (if not cached)
-    let insights = cachedInsights;
     const geminiKey = process.env.GEMINI_API_KEY;
+
+    if (!url) return NextResponse.json({ error: 'URL is required' }, { status: 400 });
+    if (!apiKey) return NextResponse.json({ error: 'PageSpeed API key missing' }, { status: 500 });
+
+    const normalizedUrl = url.startsWith('http') ? url : `https://${url}`;
+    const cacheKey = `${normalizedUrl}_shared`;
+    const cached = analysisCache.get(cacheKey);
+
+    // Initial tech stack and security objects
+    let techStack = { technologies: [], ssl: { valid: false }, headers: {} };
+    let urlSecurity = { grade: 'N/A', warnings: [] };
+    let securityDetails: any = { organization: 'Unknown', score: 0, hasForms: false, hasCaptcha: false };
+    let insights = '';
+
+    // START TURBO PARALLEL TASKS: Tech Stack + Gemini + PageSpeed
+    console.log(`[PageSpeed] Starting Turbo Analysis for ${url}...`);
     
-    if (geminiKey && !insights) {
-      const genAI = new GoogleGenerativeAI(geminiKey);
-      const modelNames = ["gemini-2.0-flash", "gemini-flash-latest", "gemini-pro-latest", "gemini-1.5-flash"];
-      let lastError = null;
+    const techPromise = (async () => {
+      try {
+        const detectRes = await fetch(`https://detectzestack.com/api/v1/analyze?url=${encodeURIComponent(normalizedUrl)}`, {
+          headers: { 'x-api-key': process.env.DETECTZESTACK_API_KEY || '' }
+        });
+        if (detectRes.ok) return await detectRes.json();
+      } catch (e) { console.warn('[DetectZeStack] Failed:', e); }
+      return null;
+    })();
 
-      for (const modelName of modelNames) {
-        try {
-          console.log(`[PageSpeed] Attempting AI insights with: ${modelName}`);
-          const model = genAI.getGenerativeModel({ model: modelName });
-          
-          const prompt = `Act as a web analyst. Analyze the overall website: ${url}
-          Site Title: ${siteTitle}
-          Site Description: ${siteDesc}
-          
-          Task:
-          1. Provide exactly 3 ultra-short speed tips (one sentence each).
-          2. Identify the official organization name.
-          
-          IMPORTANT: DO NOT use asterisks (*). No bolding. Keep tips extremely brief (max 10 words per tip).
-          
-          Response Format:
-          ORGANIZATION: (Name)
-          TIPS: (List 3 short tips separated by semicolons) `;
-
-          const result = await model.generateContent(prompt);
-          const text = result.response.text();
-
-          if (text) {
-            const getSection = (key: string) => {
-              const parts = text.split(new RegExp(`${key}:`, 'i'));
-              return parts.length > 1 ? parts[1].split(/\n/)[0].trim() : '';
-            };
-
-            const orgName = getSection('ORGANIZATION');
-            const rawTips = getSection('TIPS');
-            const formattedTips = rawTips.split(';').map((t, i) => `${i + 1}. ${t.trim()}`).join('\n');
-            
-            insights = `Organization: ${orgName}\n${formattedTips}`;
-            securityDetails.organization = orgName || 'Unknown';
-            
-            // Calculate security score based on Lighthouse data
-            if (securityDetails.hasForms) {
-              securityDetails.score = securityDetails.hasCaptcha ? 100 : 50;
-            } else {
-              securityDetails.score = 100;
+    const geminiPromise = (async () => {
+      if (cached && (Date.now() - cached.timestamp < CACHE_TTL)) return cached.data;
+      if (geminiKey) {
+        const genAI = new GoogleGenerativeAI(geminiKey);
+        const modelNames = ["gemini-2.0-flash", "gemini-flash-latest", "gemini-pro-latest", "gemini-1.5-flash"];
+        for (const modelName of modelNames) {
+          try {
+            const model = genAI.getGenerativeModel({ model: modelName });
+            const prompt = `Act as a web analyst. Analyze ${normalizedUrl}. Provide 1 line for ORGANIZATION: name and 3 ultra-short speed TIPS: (separated by semicolons). Max 4 lines total. No bolding.`;
+            const result = await model.generateContent(prompt);
+            const text = result.response.text();
+            if (text) {
+              const getSection = (key: string) => {
+                const parts = text.split(new RegExp(`${key}:`, 'i'));
+                return parts.length > 1 ? parts[1].split(/\n/)[0].trim() : '';
+              };
+              const orgName = getSection('ORGANIZATION');
+              const rawTips = getSection('TIPS');
+              const formattedTips = rawTips.split(';').map((t, i) => `${i + 1}. ${t.trim()}`).join('\n');
+              return { insights: `Organization: ${orgName}\n${formattedTips}`, orgName };
             }
-
-            // Save shared data to cache
-            analysisCache.set(cacheKey, {
-              timestamp: Date.now(),
-              data: { techStack, urlSecurity, securityDetails, insights }
-            });
-            console.log(`[PageSpeed] Success with model: ${modelName}`);
-            break; // Success!
-          }
-        } catch (err: any) {
-          console.warn(`[PageSpeed] Model ${modelName} failed:`, err.message);
-          lastError = err;
-          continue;
+          } catch (e) { continue; }
         }
       }
+      return { insights: '', orgName: 'Unknown' };
+    })();
 
-      // Final attempt: Auto-discovery if all models failed
-      if (!insights) {
-        try {
-          console.log("[PageSpeed] Final attempt: Discovering any available model...");
-          const modelsResult = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${geminiKey}`);
-          const modelsData = await modelsResult.json();
+    const lighthousePromise = runLighthouse(normalizedUrl, strategy, apiKey);
 
-          if (modelsData.models) {
-            const autoFound = modelsData.models.find((m: any) =>
-                m.supportedGenerationMethods.includes("generateContent") &&
-                !m.name.includes("vision") && !m.name.includes("tts")
-            );
+    // Wait for ALL tasks in parallel
+    const [detectData, aiResult, lighthouseResult] = await Promise.all([techPromise, geminiPromise, lighthousePromise]);
 
-            if (autoFound) {
-                const modelName = autoFound.name.replace("models/", "");
-                console.log(`[PageSpeed] Trying auto-discovered model: ${modelName}`);
-                const model = genAI.getGenerativeModel({ model: modelName });
-                const result = await model.generateContent(`Act as a web analyst. Analyze ${url}. Provide ORGANIZATION name and 3 speed TIPS.`);
-                const text = result.response.text();
-                insights = text;
-            }
-          }
-        } catch (e) {
-          console.error("[PageSpeed] Auto-discovery failed.");
-        }
-      }
-
-      if (!insights && lastError?.code === 429) {
-        insights = "AI analysis limit reached for all models. Please wait a while or upgrade your plan.";
-      }
+    // Process Tech Stack
+    if (detectData) {
+      techStack = detectData.techStack || techStack;
+      urlSecurity = detectData.security || urlSecurity;
     }
+
+    insights = aiResult.insights || '';
+    securityDetails.organization = aiResult.orgName || 'Unknown';
+
+    // Cache the AI results
+    analysisCache.set(cacheKey, {
+      timestamp: Date.now(),
+      data: { techStack, urlSecurity, securityDetails, insights }
+    });
 
     if (!lighthouseResult) {
-      // Partial return if PageSpeed fails, but now with AI INSIGHTS!
       return NextResponse.json({
         url: normalizedUrl,
         strategy,
@@ -271,7 +99,7 @@ export async function POST(req: Request) {
           totalBlockingTime: "N/A",
           cumulativeLayoutShift: "N/A",
         },
-        insights: insights || "Google Lighthouse was unable to analyze this site, but technology analysis was completed.",
+        insights: insights || "PageSpeed analysis was blocked, but AI and Tech analysis completed.",
         security: securityDetails,
         techStack,
         urlSecurity,
@@ -279,47 +107,61 @@ export async function POST(req: Request) {
       });
     }
 
-    const getScore = (cat: string) => {
-      const category = lighthouseResult.categories[cat];
-      if (!category) return null; // Category was skipped
-      const score = category.score;
-      return typeof score === 'number' ? Math.round(score * 100) : null;
-    };
+    const data = lighthouseResult.lighthouseResult;
+    const scores = data.categories;
 
-    const getAudit = (audit: string) => lighthouseResult.audits[audit]?.displayValue || 'N/A';
-
-    const scores = {
-      performance: getScore('performance'),
-      accessibility: getScore('accessibility'),
-      bestPractices: getScore('best-practices'),
-      seo: getScore('seo'),
-    };
-
-    const metrics = {
-      firstContentfulPaint: getAudit('first-contentful-paint'),
-      speedIndex: getAudit('speed-index'),
-      largestContentfulPaint: getAudit('largest-contentful-paint'),
-      interactive: getAudit('interactive'),
-      totalBlockingTime: getAudit('total-blocking-time'),
-      cumulativeLayoutShift: getAudit('cumulative-layout-shift'),
-    };
-
-    const result = {
-      url: lighthouseResult.requestedUrl,
-      fetchTime: lighthouseResult.fetchTime,
-      scores,
-      metrics,
-      insights: insights || "No AI insights generated for this run.",
+    return NextResponse.json({
+      url: normalizedUrl,
+      strategy,
+      scores: {
+        performance: scores.performance?.score ? Math.round(scores.performance.score * 100) : 0,
+        accessibility: scores.accessibility?.score ? Math.round(scores.accessibility.score * 100) : 0,
+        bestPractices: scores['best-practices']?.score ? Math.round(scores['best-practices'].score * 100) : 0,
+        seo: scores.seo?.score ? Math.round(scores.seo.score * 100) : 0,
+      },
+      metrics: {
+        firstContentfulPaint: data.audits['first-contentful-paint']?.displayValue || "N/A",
+        speedIndex: data.audits['speed-index']?.displayValue || "N/A",
+        largestContentfulPaint: data.audits['largest-contentful-paint']?.displayValue || "N/A",
+        interactive: data.audits['interactive']?.displayValue || "N/A",
+        totalBlockingTime: data.audits['total-blocking-time']?.displayValue || "N/A",
+        cumulativeLayoutShift: data.audits['cumulative-layout-shift']?.displayValue || "N/A",
+      },
+      insights,
       security: securityDetails,
       techStack,
       urlSecurity,
-      screenshot: lighthouseResult.audits['final-screenshot']?.details?.data || null,
+      screenshot: data.audits['final-screenshot']?.details?.data || null,
+    });
+
+  } catch (error: any) {
+    console.error('[PageSpeed] Fatal Error:', error);
+    return NextResponse.json({ error: 'Internal Server Error' }, { status: 500 });
+  }
+}
+
+async function runLighthouse(url: string, strategy: string, key: string) {
+  try {
+    const fastCategories = ['performance', 'accessibility', 'seo'];
+    const fetchWithTimeout = async (cats: string[]) => {
+      const params = new URLSearchParams({ url, strategy, key });
+      cats.forEach(c => params.append('category', c));
+      const res = await fetch(`https://www.googleapis.com/pagespeedonline/v5/runPagespeed?${params.toString()}`);
+      if (res.ok) return await res.json();
+      return null;
     };
 
-    console.log(`[PageSpeed] Success: ${url}`);
-    return NextResponse.json(result);
-  } catch (error: any) {
-    console.error('[PageSpeed] Fatal Route Error:', error);
-    return NextResponse.json({ error: error.message || 'Internal Server Error' }, { status: 500 });
+    // Stage 1: Fast Audit (Performance, Accessibility, SEO)
+    let data = await fetchWithTimeout(fastCategories);
+    
+    // Stage 2: Performance Only if Stage 1 failed
+    if (!data) {
+      console.warn(`[PageSpeed] Fast audit failed for ${url}. Retrying performance only...`);
+      data = await fetchWithTimeout(['performance']);
+    }
+
+    return data;
+  } catch (e) {
+    return null;
   }
 }
