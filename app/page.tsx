@@ -1,4 +1,5 @@
 import SpeedTester from "@/components/SpeedTester";
+import Link from 'next/link';
 
 export default function Home() {
   return (
@@ -17,7 +18,7 @@ export default function Home() {
           </div>
           
           <nav className="hidden md:flex items-center gap-8 text-sm font-medium text-zinc-600 dark:text-zinc-400">
-            <a href="#" className="hover:text-zinc-900 dark:hover:text-zinc-100 transition-colors">Documentation</a>
+            <Link href="/docs" className="hover:text-zinc-900 dark:hover:text-zinc-100 transition-colors">Documentation</Link>
             <a href="#" className="hover:text-zinc-900 dark:hover:text-zinc-100 transition-colors">Pricing</a>
             <a href="#" className="px-4 py-2 bg-zinc-900 dark:bg-white text-white dark:text-black rounded-xl hover:opacity-90 transition-opacity">Login</a>
           </nav>

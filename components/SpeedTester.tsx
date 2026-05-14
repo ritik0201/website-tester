@@ -4,6 +4,7 @@ import { useState, useEffect } from 'react';
 import ScoreCard from './ScoreCard';
 import MetricsGrid from './MetricsGrid';
 import ChatBot from './ChatBot';
+import Link from 'next/link';
 
 export default function SpeedTester() {
   const [url, setUrl] = useState('');
@@ -141,6 +142,15 @@ export default function SpeedTester() {
             <ScoreCard label="Best Practices" score={currentResult.scores.bestPractices} color="amber" />
             <ScoreCard label="SEO" score={currentResult.scores.seo} color="rose" />
             <ScoreCard label="Security Health" score={currentResult.security?.score} color="cyan" />
+          </div>
+
+          <div className="flex justify-center">
+            <Link href="/docs" className="text-sm font-medium text-indigo-600 dark:text-indigo-400 hover:underline flex items-center gap-1">
+              Learn how these scores are calculated
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+              </svg>
+            </Link>
           </div>
 
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
