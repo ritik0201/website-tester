@@ -22,13 +22,15 @@ export async function POST(req: Request) {
 
     // Initial tech stack and security objects
     let techStack = { technologies: [], ssl: { valid: false }, headers: {} };
-    let urlSecurity = { grade: 'N/A', warnings: [] };
+    let urlSecurity = { grade: 'N/A', warnings: [] as string[], headers: [] as string[], ssl: null as any };
     let securityDetails: any = { organization: 'Unknown', score: 0, hasForms: false, hasCaptcha: false };
     let insights = '';
 
-    // START TURBO PARALLEL TASKS: Tech Stack + Gemini + PageSpeed
+    // START TURBO PARALLEL TASKS: Tech Stack + Gemini + PageSpeed + Local Security
     console.log(`[PageSpeed] Starting Turbo Analysis for ${url}...`);
     
+    const localSecurityPromise = analyzeSecurityLocally(normalizedUrl);
+
     const techPromise = (async () => {
       try {
         const detectRes = await fetch(`https://detectzestack.com/api/v1/analyze?url=${encodeURIComponent(normalizedUrl)}`, {
@@ -69,13 +71,37 @@ export async function POST(req: Request) {
     const lighthousePromise = runLighthouse(normalizedUrl, strategy, apiKey);
 
     // Wait for ALL tasks in parallel
-    const [detectData, aiResult, lighthouseResult] = await Promise.all([techPromise, geminiPromise, lighthousePromise]);
+    const [detectData, aiResult, lighthouseResult, localSecurity] = await Promise.all([
+      techPromise, 
+      geminiPromise, 
+      lighthousePromise,
+      localSecurityPromise
+    ]);
 
     // Process Tech Stack
     if (detectData) {
       techStack = detectData.techStack || techStack;
-      urlSecurity = detectData.security || urlSecurity;
+      // Merge detectData security with local security if detectData is better
+      if (detectData.security && detectData.security.grade !== 'N/A') {
+        urlSecurity = { ...urlSecurity, ...detectData.security };
+      }
     }
+
+    // Always prefer local security headers and SSL if available
+    urlSecurity.headers = Array.from(new Set([...(urlSecurity.headers || []), ...localSecurity.headers]));
+    urlSecurity.ssl = localSecurity.ssl || urlSecurity.ssl;
+    urlSecurity.warnings = Array.from(new Set([...(urlSecurity.warnings || []), ...localSecurity.warnings]));
+    
+    // Calculate Score if N/A or low
+    if (urlSecurity.grade === 'N/A') {
+      const headerCount = localSecurity.headers.length;
+      if (headerCount >= 4) urlSecurity.grade = 'A';
+      else if (headerCount >= 2) urlSecurity.grade = 'B';
+      else if (headerCount >= 1) urlSecurity.grade = 'C';
+      else urlSecurity.grade = 'D';
+    }
+
+    securityDetails.score = calculateSecurityScore(urlSecurity, localSecurity);
 
     insights = aiResult.insights || '';
     securityDetails.organization = aiResult.orgName || 'Unknown';
@@ -140,9 +166,74 @@ export async function POST(req: Request) {
   }
 }
 
+async function analyzeSecurityLocally(url: string) {
+  const results = {
+    headers: [] as string[],
+    ssl: null as any,
+    warnings: [] as string[],
+    isHttps: url.startsWith('https')
+  };
+
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 5000);
+
+    const res = await fetch(url, { 
+      method: 'HEAD', 
+      signal: controller.signal,
+      headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) WebsiteTester/1.0' }
+    });
+    clearTimeout(timeout);
+
+    const headers = res.headers;
+    const securityHeaders = [
+      'content-security-policy',
+      'strict-transport-security',
+      'x-frame-options',
+      'x-content-type-options',
+      'referrer-policy',
+      'permissions-policy'
+    ];
+
+    securityHeaders.forEach(h => {
+      if (headers.get(h)) {
+        results.headers.push(h.split('-').map(word => word.charAt(0).toUpperCase() + word.slice(1)).join('-'));
+      }
+    });
+
+    if (!results.isHttps) {
+      results.warnings.push('Website is not using HTTPS');
+    }
+
+  } catch (e) {
+    console.warn('[LocalSecurity] Header check failed:', e);
+  }
+
+  return results;
+}
+
+function calculateSecurityScore(urlSecurity: any, localSecurity: any) {
+  let score = 0;
+  
+  // SSL Check (40 points)
+  if (localSecurity.isHttps) score += 30;
+  if (urlSecurity.ssl) score += 10;
+
+  // Headers Check (40 points)
+  const headerWeight = 40 / 6;
+  score += (localSecurity.headers.length * headerWeight);
+
+  // Grade multiplier (20 points)
+  if (urlSecurity.grade === 'A' || urlSecurity.grade === 'A+') score += 20;
+  else if (urlSecurity.grade === 'B') score += 15;
+  else if (urlSecurity.grade === 'C') score += 10;
+
+  return Math.min(100, Math.round(score));
+}
+
 async function runLighthouse(url: string, strategy: string, key: string) {
   try {
-    const fastCategories = ['performance', 'accessibility', 'seo'];
+    const fastCategories = ['performance', 'accessibility', 'seo', 'best-practices'];
     const fetchWithTimeout = async (cats: string[]) => {
       const params = new URLSearchParams({ url, strategy, key });
       cats.forEach(c => params.append('category', c));

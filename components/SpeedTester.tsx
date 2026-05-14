@@ -140,7 +140,7 @@ export default function SpeedTester() {
             <ScoreCard label="Accessibility" score={currentResult.scores.accessibility} color="indigo" />
             <ScoreCard label="Best Practices" score={currentResult.scores.bestPractices} color="amber" />
             <ScoreCard label="SEO" score={currentResult.scores.seo} color="rose" />
-            <ScoreCard label="Form Security" score={currentResult.security?.score} color="cyan" />
+            <ScoreCard label="Security Health" score={currentResult.security?.score} color="cyan" />
           </div>
 
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
@@ -241,6 +241,24 @@ export default function SpeedTester() {
                             </div>
                           ))}
                         </div>
+                      </div>
+                    )}
+                    {currentResult.urlSecurity.warnings?.length > 0 && (
+                      <div className="p-5 bg-rose-50 dark:bg-rose-900/10 rounded-3xl border border-rose-100 dark:border-rose-900/20 space-y-3">
+                        <div className="flex items-center gap-2 text-xs font-bold text-rose-500 uppercase tracking-widest">
+                          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                          </svg>
+                          Security Warnings
+                        </div>
+                        <ul className="space-y-1">
+                          {currentResult.urlSecurity.warnings.map((w: string, i: number) => (
+                            <li key={i} className="text-[11px] text-rose-600 dark:text-rose-400 flex items-center gap-2">
+                              <span className="w-1 h-1 bg-rose-400 rounded-full" />
+                              {w}
+                            </li>
+                          ))}
+                        </ul>
                       </div>
                     )}
                   </div>
