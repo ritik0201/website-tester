@@ -10,6 +10,8 @@ export default function SpeedTester() {
   const [url, setUrl] = useState('');
   const [strategy, setStrategy] = useState<'mobile' | 'desktop'>('mobile');
   const [loading, setLoading] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
   const [results, setResults] = useState<{ mobile: any; desktop: any } | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -46,10 +48,64 @@ export default function SpeedTester() {
         mobile: mobileData,
         desktop: desktopData,
       });
+      setSaved(false); // Reset saved status for new analysis
     } catch (err: any) {
       setError(err.message);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const sendDataToSheets = async (data: any) => {
+    try {
+      const payload = {
+        url: data.url,
+        strategy: data.strategy,
+        performance: data.scores.performance,
+        accessibility: data.scores.accessibility,
+        bestPractices: data.scores.bestPractices,
+        seo: data.scores.seo,
+        securityScore: data.security?.score || 0,
+        securityGrade: data.urlSecurity?.grade || 'N/A',
+        techStack: Array.isArray(data.techStack) 
+          ? data.techStack.map((t: any) => t.name).join(', ') 
+          : (data.techStack?.technologies && Array.isArray(data.techStack.technologies)
+              ? data.techStack.technologies.map((t: any) => t.name).join(', ')
+              : ''),
+        fcp: data.metrics.firstContentfulPaint,
+        lcp: data.metrics.largestContentfulPaint,
+        cls: data.metrics.cumulativeLayoutShift,
+        tbt: data.metrics.totalBlockingTime,
+        speedIndex: data.metrics.speedIndex,
+        interactive: data.metrics.interactive
+      };
+
+      const res = await fetch('/api/log-to-sheets', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+
+      if (!res.ok) throw new Error('Failed to log');
+    } catch (err) {
+      console.error('Failed to log to Google Sheets:', err);
+      throw err;
+    }
+  };
+
+  const handleSaveToSheet = async () => {
+    if (!results || saved || saving) return;
+    setSaving(true);
+    try {
+      await Promise.all([
+        sendDataToSheets(results.mobile),
+        sendDataToSheets(results.desktop)
+      ]);
+      setSaved(true);
+    } catch (err) {
+      console.error('Save failed:', err);
+    } finally {
+      setSaving(false);
     }
   };
 
@@ -136,6 +192,26 @@ export default function SpeedTester() {
 
       {currentResult && (
         <div key={strategy} className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-700">
+          <div className="flex flex-col md:flex-row md:items-end justify-between gap-4 px-2">
+            <div>
+              <p className="text-xs font-bold text-indigo-600 dark:text-indigo-400 uppercase tracking-widest mb-1">Analysis Results for</p>
+              <h2 className="text-3xl font-bold text-zinc-900 dark:text-zinc-50 truncate max-w-xl">{currentResult.url}</h2>
+              {currentResult.security?.organization && currentResult.security.organization !== 'Unknown' && (
+                <div className="flex items-center gap-2 mt-2 px-3 py-1 bg-indigo-50 dark:bg-indigo-500/10 text-indigo-600 dark:text-indigo-400 rounded-full w-fit border border-indigo-100 dark:border-indigo-500/20">
+                  <svg className="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 20 20">
+                    <path fillRule="evenodd" d="M4 4a2 2 0 012-2h8a2 2 0 012 2v12a1 1 0 01-1 1H5a1 1 0 01-1-1V4zm3 1h6v4H7V5zm6 6H7v2h6v-2z" clipRule="evenodd" />
+                  </svg>
+                  <span className="text-xs font-bold uppercase tracking-tight">{currentResult.security.organization}</span>
+                </div>
+              )}
+            </div>
+            <div className="flex items-center gap-3">
+              <div className={`px-4 py-2 rounded-2xl text-xs font-bold uppercase tracking-widest ${strategy === 'mobile' ? 'bg-amber-500/10 text-amber-600' : 'bg-sky-500/10 text-sky-600'}`}>
+                {strategy} View
+              </div>
+            </div>
+          </div>
+
           <div className="grid grid-cols-2 md:grid-cols-5 gap-4 md:gap-6">
             <ScoreCard label="Performance" score={currentResult.scores.performance} color="emerald" />
             <ScoreCard label="Accessibility" score={currentResult.scores.accessibility} color="indigo" />
@@ -144,32 +220,64 @@ export default function SpeedTester() {
             <ScoreCard label="Security Health" score={currentResult.security?.score} color="cyan" />
           </div>
 
-          <div className="flex justify-center">
+          <div className="flex flex-col md:flex-row items-center justify-center gap-6">
             <Link href="/docs" className="text-sm font-medium text-indigo-600 dark:text-indigo-400 hover:underline flex items-center gap-1">
               Learn how these scores are calculated
               <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
               </svg>
             </Link>
+
+            <button
+              onClick={handleSaveToSheet}
+              disabled={saving || saved}
+              className={`flex items-center gap-2 px-6 py-2.5 rounded-2xl text-sm font-bold transition-all ${
+                saved 
+                  ? 'bg-emerald-500/10 text-emerald-500 cursor-default border border-emerald-500/20' 
+                  : 'bg-zinc-900 dark:bg-white text-white dark:text-black hover:opacity-90 shadow-xl shadow-zinc-200 dark:shadow-none'
+              }`}
+            >
+              {saving ? (
+                <>
+                  <svg className="animate-spin h-4 w-4" viewBox="0 0 24 24">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+                  </svg>
+                  Logging to Sheet...
+                </>
+              ) : saved ? (
+                <>
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" d="M5 13l4 4L19 7" />
+                  </svg>
+                  Saved to Google Sheet
+                </>
+              ) : (
+                <>
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 17v-2a2 2 0 00-2-2H5a2 2 0 00-2-2v2a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
+                  </svg>
+                  Save Full Report to Sheet
+                </>
+              )}
+            </button>
           </div>
 
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
             <div className="lg:col-span-2 space-y-8">
-              {currentResult.insights && (
-                <div className="p-1 rounded-[2rem] bg-gradient-to-br from-indigo-500 via-purple-500 to-pink-500 shadow-lg shadow-purple-200/50 dark:shadow-none">
-                  <div className="bg-white dark:bg-zinc-900 rounded-[1.9rem] p-6 space-y-4">
-                    <div className="flex items-center gap-2 text-indigo-600 dark:text-indigo-400 font-bold uppercase tracking-wider text-xs">
-                      <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 10V3L4 14h7v7l9-11h-7z" />
-                      </svg>
-                      AI Recommendations
-                    </div>
-                    <div className="text-zinc-700 dark:text-zinc-300 leading-relaxed whitespace-pre-wrap text-sm md:text-base">
-                      {currentResult.insights}
-                    </div>
+              <div className="p-1 rounded-[2rem] bg-gradient-to-br from-indigo-500 via-purple-500 to-pink-500 shadow-lg shadow-purple-200/50 dark:shadow-none">
+                <div className="bg-white dark:bg-zinc-900 rounded-[1.9rem] p-6 space-y-4">
+                  <div className="flex items-center gap-2 text-indigo-600 dark:text-indigo-400 font-bold uppercase tracking-wider text-xs">
+                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 10V3L4 14h7v7l9-11h-7z" />
+                    </svg>
+                    AI Recommendations
+                  </div>
+                  <div className="text-zinc-700 dark:text-zinc-300 leading-relaxed whitespace-pre-wrap text-sm md:text-base">
+                    {currentResult.insights || "Analyzing technical patterns and generating recommendations..."}
                   </div>
                 </div>
-              )}
+              </div>
 
               
               <div className="space-y-6">
@@ -177,7 +285,7 @@ export default function SpeedTester() {
                 <MetricsGrid metrics={currentResult.metrics} />
               </div>
 
-              {currentResult.techStack && currentResult.techStack.length > 0 && (
+              {(Array.isArray(currentResult.techStack) ? currentResult.techStack : currentResult.techStack?.technologies)?.length > 0 && (
                 <div className="space-y-6">
                   <div className="flex items-center gap-2 px-2">
                     <div className="p-2 bg-indigo-500/10 text-indigo-500 rounded-lg">
@@ -188,7 +296,7 @@ export default function SpeedTester() {
                     <h2 className="text-2xl font-bold text-zinc-900 dark:text-zinc-50">Technology Stack</h2>
                   </div>
                   <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3">
-                    {currentResult.techStack.map((tech: any, i: number) => (
+                    {(Array.isArray(currentResult.techStack) ? currentResult.techStack : currentResult.techStack.technologies).map((tech: any, i: number) => (
                       <div key={i} className="group p-4 bg-white dark:bg-zinc-900 rounded-2xl border border-zinc-200 dark:border-zinc-800 hover:border-indigo-500/50 hover:shadow-lg hover:shadow-indigo-500/5 transition-all">
                         <p className="text-xs font-bold text-zinc-400 dark:text-zinc-500 uppercase tracking-widest mb-1">{tech.category || 'Tool'}</p>
                         <p className="text-sm font-bold text-zinc-900 dark:text-zinc-100">{tech.name}</p>

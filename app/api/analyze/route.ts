@@ -42,22 +42,43 @@ export async function POST(req: Request) {
     })();
 
     const geminiPromise = (async () => {
-      if (cached && (Date.now() - cached.timestamp < CACHE_TTL)) return cached.data;
+      if (cached && (Date.now() - cached.timestamp < CACHE_TTL)) {
+        return { 
+          insights: cached.data.insights, 
+          orgName: cached.data.securityDetails?.organization || 'Unknown' 
+        };
+      }
       if (geminiKey) {
         const genAI = new GoogleGenerativeAI(geminiKey);
         const modelNames = ["gemini-2.0-flash", "gemini-flash-latest", "gemini-pro-latest", "gemini-1.5-flash"];
         for (const modelName of modelNames) {
           try {
             const model = genAI.getGenerativeModel({ model: modelName });
-            const prompt = `Act as a web analyst. Analyze ${normalizedUrl}. Provide 1 line for ORGANIZATION: name and 3 ultra-short speed TIPS: (separated by semicolons). Max 4 lines total. No bolding.`;
+            const prompt = `Act as a web analyst. Analyze the website: ${normalizedUrl}. 
+            Output format:
+            ORGANIZATION: [Exact Legal Name of the company or 'Unknown']
+            TIPS: [3 short performance tips separated by semicolons]`;
             const result = await model.generateContent(prompt);
             const text = result.response.text();
             if (text) {
               const getSection = (key: string) => {
-                const parts = text.split(new RegExp(`${key}:`, 'i'));
-                return parts.length > 1 ? parts[1].split(/\n/)[0].trim() : '';
+                const regex = new RegExp(`${key}:\\s*(.*)`, 'i');
+                const match = text.match(regex);
+                return match ? match[1].split('\n')[0].trim() : '';
               };
-              const orgName = getSection('ORGANIZATION');
+              let orgName = getSection('ORGANIZATION');
+              
+              // Fallback: If orgName is still empty, try to extract from the first line if it looks like a name
+              if (!orgName && text.length > 0) {
+                const firstLine = text.split('\n')[0];
+                if (firstLine.toUpperCase().includes('ORGANIZATION')) {
+                   orgName = firstLine.split(':')[1]?.trim() || '';
+                }
+              }
+
+              // Final cleaning: remove quotes or periods at the end
+              orgName = orgName.replace(/["'.]$/g, '').trim();
+
               const rawTips = getSection('TIPS');
               const formattedTips = rawTips.split(';').map((t, i) => `${i + 1}. ${t.trim()}`).join('\n');
               return { insights: `Organization: ${orgName}\n${formattedTips}`, orgName };
@@ -65,7 +86,15 @@ export async function POST(req: Request) {
           } catch (e) { continue; }
         }
       }
-      return { insights: '', orgName: 'Unknown' };
+
+      // Final Fallback if AI failed or returned Unknown
+      let finalOrgName = 'Unknown';
+      try {
+        const domain = new URL(normalizedUrl).hostname.replace('www.', '').split('.')[0];
+        finalOrgName = domain.charAt(0).toUpperCase() + domain.slice(1);
+      } catch (e) {}
+
+      return { insights: '', orgName: finalOrgName };
     })();
 
     const lighthousePromise = runLighthouse(normalizedUrl, strategy, apiKey);
@@ -104,7 +133,18 @@ export async function POST(req: Request) {
     securityDetails.score = calculateSecurityScore(urlSecurity, localSecurity);
 
     insights = aiResult.insights || '';
-    securityDetails.organization = aiResult.orgName || 'Unknown';
+    let orgName = aiResult.orgName || 'Unknown';
+
+    // GUARANTEED FALLBACK: If AI returned 'Unknown', use the domain name
+    if (orgName.toLowerCase() === 'unknown' || !orgName) {
+      try {
+        const domain = new URL(normalizedUrl).hostname.replace('www.', '').split('.')[0];
+        orgName = domain.charAt(0).toUpperCase() + domain.slice(1);
+      } catch (e) {
+        orgName = 'Unknown';
+      }
+    }
+    securityDetails.organization = orgName;
 
     // Cache the AI results
     analysisCache.set(cacheKey, {
